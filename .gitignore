@@ -1,0 +1,15 @@
+
+# Auto-added by AI Local
+blobs/
+manifests/
+data/
+__pycache__/
+*.pyc
+.env
+.env.local
+*.pkg
+*.exe
+dist/
+build/
+.streamlit/
+.claude/

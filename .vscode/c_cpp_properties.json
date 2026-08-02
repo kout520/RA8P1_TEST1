@@ -1,0 +1,29 @@
+{
+    "configurations": [
+        {
+            "name": "RA8P1 ARM GCC",
+            "compileCommands": "${workspaceFolder}/Debug/compile_commands.json",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/ra_gen",
+                "${workspaceFolder}/code",
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/ra/fsp/inc",
+                "${workspaceFolder}/ra/fsp/inc/api",
+                "${workspaceFolder}/ra/fsp/inc/instances",
+                "${workspaceFolder}/ra/arm/CMSIS_6/CMSIS/Core/Include",
+                "${workspaceFolder}/ra_cfg/fsp_cfg",
+                "${workspaceFolder}/ra_cfg/fsp_cfg/bsp"
+            ],
+            "defines": [
+                "_RENESAS_RA_",
+                "_RA_CORE=CPU0",
+                "_RA_ORDINAL=1"
+            ],
+            "compilerPath": "C:/Renesas/RA/e2studio_v2025-12_fsp_v6.4.0/toolchains/gcc_arm/13.2.rel1/bin/arm-none-eabi-gcc.exe",
+            "intelliSenseMode": "gcc-arm",
+            "cStandard": "c99"
+        }
+    ],
+    "version": 4
+}
