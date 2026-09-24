@@ -190,7 +190,14 @@ void LCD_Display_Dir(u8 dir);						                        //设置屏幕显示�
 void LCD_Set_Window(u16 sx,u16 sy,u16 width,u16 height);         //设置窗口
 void LCD_ShowImage(u16 x, u16 y, u16 width, u16 height, u16 *image);
 
-
+/* 16x16 中文字模显示 + 待机笑脸 + 中文提示消息 */
+void LCD_ShowChinese16(u16 x, u16 y, u8 idx, u16 color);       // 显示一个中文字(索引)
+void LCD_ShowChineseStr(u16 x, u16 y, const u8 *idx, u16 color); // 显示一串中文字(0xFF结束)
+void LCD_DrawSmiley(void);                                     // 待机笑脸
+void LCD_ShowAvatar(u16 x, u16 y);                             // 显示 100x90 头像位图
+void LCD_ShowMsg(u8 msg_id);                                   // 显示中文提示消息(0~13)
+void LCD_DrawDots(void);                                       // 显示"..."等待
+void LCD_Poll(void);                                           // LCD轮询: 3秒变"..." + 表情眨眼
 
 
 #endif

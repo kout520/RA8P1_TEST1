@@ -6,14 +6,17 @@
 C_SRCS += \
 ../code/AS608pro.c \
 ../code/PN532_hal.c \
+../code/command_dispatch.c \
 ../code/esp32_comm.c \
 ../code/font.c \
 ../code/inmp441.c \
 ../code/key.c \
 ../code/lcd.c \
 ../code/mfcc_engine.c \
+../code/mram_kv.c \
 ../code/ov5640.c \
 ../code/pn532.c \
+../code/speaker_verify.c \
 ../code/text.c \
 ../code/tjc_usart_hmi.c \
 ../code/voice.c \
@@ -22,14 +25,17 @@ C_SRCS += \
 C_DEPS += \
 ./code/AS608pro.d \
 ./code/PN532_hal.d \
+./code/command_dispatch.d \
 ./code/esp32_comm.d \
 ./code/font.d \
 ./code/inmp441.d \
 ./code/key.d \
 ./code/lcd.d \
 ./code/mfcc_engine.d \
+./code/mram_kv.d \
 ./code/ov5640.d \
 ./code/pn532.d \
+./code/speaker_verify.d \
 ./code/text.d \
 ./code/tjc_usart_hmi.d \
 ./code/voice.d \
@@ -38,14 +44,17 @@ C_DEPS += \
 OBJS += \
 ./code/AS608pro.o \
 ./code/PN532_hal.o \
+./code/command_dispatch.o \
 ./code/esp32_comm.o \
 ./code/font.o \
 ./code/inmp441.o \
 ./code/key.o \
 ./code/lcd.o \
 ./code/mfcc_engine.o \
+./code/mram_kv.o \
 ./code/ov5640.o \
 ./code/pn532.o \
+./code/speaker_verify.o \
 ./code/text.o \
 ./code/tjc_usart_hmi.o \
 ./code/voice.o \

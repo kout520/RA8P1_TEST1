@@ -44,6 +44,7 @@ uint8_t AS608_AddFR(void);                 /* 录入指纹流程 */
 uint8_t AS608_PressFR(uint16_t *matched_id);/* 刷指纹 (返回 0:未松开 1:匹配成功 2:匹配失败 3:无指纹) */
 uint8_t AS608_DeleteFR(uint16_t delete_id);/* 删除指纹 (0xFFFF=全部删除) */
 uint8_t AS608_GetFRNumber(void);           /* 获取已录入指纹数 */
+void fp_refresh_count(void);               /* 刷新指纹数量到 t50 控件 */
 
 /* ===== 底层协议接口 ===== */
 extern bsp_io_level_t level;
@@ -81,6 +82,7 @@ uint8_t PS_HighSpeedSearch(uint8_t BufferID, uint16_t StartPage,
                            uint16_t PageNum, SearchResult *p);  /* 高速搜索 */
 
 uint8_t PS_ValidTempleteNum(uint16_t *ValidN);  /* 读有效模板个数 */
+uint8_t PS_ReadIndexTable(uint8_t *IndexTable); /* 读模板索引表(32字节位图) */
 
 uint8_t PS_HandShake(uint32_t *PS_Addr);   /* 与 AS608 模块握手 */
 

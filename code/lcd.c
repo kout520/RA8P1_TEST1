@@ -8,6 +8,7 @@
 #include "stdlib.h"
 #include "font.h"
 #include "text.h"
+#include <math.h>
 
 typedef uint32_t  u32;
 typedef uint16_t u16;
@@ -1354,6 +1355,284 @@ void LCD_ShowImage(u16 x, u16 y, u16 width, u16 height, u16 *image)
     LCD_WR_REG(lcddev.setycmd);
     LCD_WR_DATA16(0);
     LCD_WR_DATA16(lcddev.height - 1);
+}
+
+/* ==================================================================
+ *   16x16 中文字模显示 + 待机笑脸 (独立于摄像头)
+ * ================================================================== */
+#include "font16.h"
+#include "face_avatar.h"
+
+void LCD_ShowChinese16(u16 x, u16 y, u8 idx, u16 color)
+{
+    if (idx >= FONT16_NUM) return;
+    for (u8 col = 0; col < 16; col++) {
+        u8 high = font16[idx][col];
+        u8 low  = font16[idx][col + 16];
+        for (u8 r = 0; r < 8; r++) {
+            if (high & (0x01 << r)) LCD_Fast_DrawPoint(x + col, y + r, color);
+            if (low  & (0x01 << r)) LCD_Fast_DrawPoint(x + col, y + r + 8, color);
+        }
+    }
+}
+
+void LCD_ShowChineseStr(u16 x, u16 y, const u8 *idx, u16 color)
+{
+    u16 cx = x;
+    while (*idx != 0xFF && cx + 16 <= 320) {
+        LCD_ShowChinese16(cx, y, *idx, color);
+        cx += 16;
+        idx++;
+    }
+}
+
+/* 前向声明 (static 眼/嘴形函数定义在 LCD_DrawSmiley 之后) */
+static void LCD_DrawMouthClosed(void);
+static void LCD_DrawMouthOpen(void);
+static void LCD_DrawEyeOpen(u16 ex, u16 ey);
+static void LCD_DrawEyeClosed(u16 ex, u16 ey);
+
+/* 眼睛参数: 大圆眼 + 高光点 (参考图, 白色看成黑/黑色看成白后的大眼) */
+#define EYE_L_CX   130
+#define EYE_R_CX   190
+#define EYE_CY     80
+#define EYE_RX     12
+#define EYE_RY     9
+
+/* 待机笑脸: 圆脸 + 大圆眼 + 闭口微笑 */
+void LCD_DrawSmiley(void)
+{
+    u16 cx = 160, cy = 100, r = 70;
+    LCD_Draw_Circle(cx, cy, r, WHITE);
+    LCD_DrawEyeOpen(EYE_L_CX, EYE_CY);
+    LCD_DrawEyeOpen(EYE_R_CX, EYE_CY);
+    LCD_DrawMouthClosed();
+}
+
+/* 睁眼: 白色椭圆眼 + 黑色高光点 */
+static void LCD_DrawEyeOpen(u16 ex, u16 ey)
+{
+    for (int dy = -EYE_RY; dy <= EYE_RY; dy++) {
+        int hw = (int)((float)EYE_RX * sqrtf(1.0f - (float)(dy * dy) / (float)(EYE_RY * EYE_RY)));
+        LCD_Fill(ex - hw, ey + dy, ex + hw, ey + dy, WHITE);
+    }
+    LCD_Fill(ex + 4, ey - 5, ex + 7, ey - 2, BLACK);  /* 高光 */
+}
+
+/* 闭眼: 擦除整眼区域后画一条白色横线 */
+static void LCD_DrawEyeClosed(u16 ex, u16 ey)
+{
+    LCD_Fill(ex - EYE_RX - 1, ey - EYE_RY - 1, ex + EYE_RX + 1, ey + EYE_RY + 1, BLACK);
+    LCD_Fill(ex - EYE_RX, ey - 1, ex + EYE_RX, ey + 1, WHITE);
+}
+
+/* ====== 嘴巴动画 (说话时张口/闭口) ======
+   嘴巴在 y=100..140, 与眼睛(y=76..84)不重叠; 擦除区域不触碰圆脸轮廓 */
+#define MOUTH_X0   128
+#define MOUTH_X1   192
+#define MOUTH_Y0   100
+#define MOUTH_Y1   140
+
+/* 闭口微笑 (抛物线) */
+static void LCD_DrawMouthClosed(void)
+{
+    u16 cx = 160, cy = 100;
+    LCD_Fill(MOUTH_X0, MOUTH_Y0, MOUTH_X1, MOUTH_Y1, BLACK);  /* 擦除旧嘴 */
+    for (int dx = -30; dx <= 30; dx++) {
+        int dy = 25 - dx * dx / 40;
+        LCD_Fast_DrawPoint(cx + dx, cy + dy, WHITE);
+    }
+}
+
+/* 张口 (说话): 白色唇环 + 黑色口腔 (椭圆) */
+static void LCD_DrawMouthOpen(void)
+{
+    u16 cx = 160, cy = 125;
+    LCD_Fill(MOUTH_X0, MOUTH_Y0, MOUTH_X1, MOUTH_Y1, BLACK);  /* 擦除旧嘴 */
+    for (int dy = -12; dy <= 12; dy++) {
+        int hw = (int)(18.0f * sqrtf(1.0f - (float)(dy * dy) / 144.0f));
+        LCD_Fill(cx - hw, cy + dy, cx + hw, cy + dy, WHITE);
+    }
+    for (int dy = -8; dy <= 8; dy++) {
+        int hw = (int)(14.0f * sqrtf(1.0f - (float)(dy * dy) / 64.0f));
+        LCD_Fill(cx - hw, cy + dy, cx + hw, cy + dy, BLACK);
+    }
+}
+
+/* 中文提示消息表 (索引序列, 0xFF 结束) */
+static const u8 cn_msg[14][24] = {
+    {0, 68, 70, 1, 2, 3, 4, 70, 5, 6, 7, 72, 23, 8, 9, 0xFF},          /* 0: 你好，我叫小白，很高兴为您服务 */
+    {10, 11, 12, 13, 71, 73, 16, 70, 52, 53, 14, 15, 0xFF},            /* 1: 员工张三已打卡，积分加十 */
+    {10, 11, 19, 20, 71, 73, 16, 70, 52, 53, 14, 15, 0xFF},            /* 2: 员工李四已打卡，积分加十 */
+    {10, 11, 21, 22, 71, 73, 16, 70, 52, 53, 14, 15, 0xFF},            /* 3: 员工王五已打卡，积分加十 */
+    {73, 16, 38, 39, 70, 63, 17, 18, 0xFF},                            /* 4: 打卡失败，请重试 */
+    {0, 69, 79, 80, 33, 34, 35, 36, 45, 37, 70, 77, 78, 38, 39, 0xFF}, /* 5: 你的信息未录入此系统，取物失败 */
+    {23, 69, 31, 32, 24, 34, 71, 38, 25, 70, 40, 26, 27, 28, 63, 66, 65, 29, 30, 0xFF}, /* 6: 您的身份记录已失效，如想操作请再次认证 */
+    {0, 71, 77, 48, 49, 50, 70, 51, 22, 52, 53, 0xFF},                 /* 7: 你已取走可乐，减五积分 */
+    {0, 71, 77, 48, 56, 57, 58, 70, 51, 22, 52, 53, 0xFF},             /* 8: 你已取走宏宝莱，减五积分 */
+    {0, 71, 77, 48, 54, 55, 70, 51, 15, 52, 53, 0xFF},                 /* 9: 你已取走牛奶，减十积分 */
+    {23, 69, 52, 53, 83, 84, 70, 63, 85, 86, 87, 88, 89, 66, 67, 0xFF}, /* 10: 您的积分不足，请充值或明天再来 */
+    {59, 60, 61, 62, 70, 63, 64, 65, 66, 67, 0xFF},                    /* 11: 库存无货，请下次再来 */
+    {68, 69, 70, 71, 72, 0, 73, 74, 75, 76, 70, 63, 77, 78, 0xFF},    /* 12: 好的，已为你打开柜门，请取物 */
+    {68, 69, 70, 23, 69, 79, 80, 71, 81, 82, 0xFF},                    /* 13: 好的，您的信息已显示 */
+};
+
+/* 显示中文提示消息 (清空最下行 + 显示) */
+extern volatile uint32_t msTicks;  /* 全局 1ms 计数器 (hal_entry.c 定义, timer_1ms_callback 递增) */
+
+static u8  g_lcd_show_active = 0;   /* 1=显示中文中 */
+static u32 g_lcd_show_start  = 0;   /* 显示中文的开始时间戳 */
+static u8  g_eyes_closed     = 0;   /* 当前是否闭眼 */
+static u8  g_mouth_open      = 0;   /* 当前是否张嘴(说话) */
+
+void LCD_ShowMsg(u8 msg_id)
+{
+    if (msg_id >= 14) return;
+    u8 len = 0;
+    while (cn_msg[msg_id][len] != 0xFF) len++;
+    u16 x = (len * 16 >= 320) ? 0 : (320 - len * 16) / 2;   /* 居中 (超长则左对齐, 防负数回绕) */
+    u16 y = 208;                    /* 往上移一行 */
+    LCD_Fill(0, y, 320, y + 16, BLACK);  /* 清空该行 */
+    LCD_ShowChineseStr(x, y, cn_msg[msg_id], WHITE);
+    g_lcd_show_active = 1;
+    g_lcd_show_start  = msTicks;
+}
+
+/* 画"..." (三个点, 居中) */
+void LCD_DrawDots(void)
+{
+    u16 y = 208;
+    LCD_Fill(0, y, 320, y + 16, BLACK);
+    for (u8 i = 0; i < 3; i++) {
+        LCD_Fill(148 + i * 12, y + 6, 152 + i * 12, y + 10, WHITE);
+    }
+}
+
+/* 头像显示位置 (由 LCD_ShowAvatar 记录, 供眨眼重绘/擦除用) */
+static u16 g_avatar_x = 0;
+static u16 g_avatar_y = 0;
+
+/* 眼睛区域 (头像本地坐标 180x162, 由 120x108 标注放大 1.5 倍算出) */
+#define LEYE_X0  57
+#define LEYE_X1  69
+#define LEYE_Y0  93
+#define LEYE_Y1  108
+#define REYE_X0  104
+#define REYE_X1  117
+#define REYE_Y0  82
+#define REYE_Y1  99
+
+/* 嘴巴区域 (头像本地坐标 180x162, 张嘴=说话状态, 由 120x108 标注放大 1.5 倍算出) */
+#define AVMOUTH_X0  80
+#define AVMOUTH_Y0  123
+#define AVMOUTH_W   15
+#define AVMOUTH_H   8
+static const u16 av_mouth_shape[AVMOUTH_H] = {
+    0x7000,  /* y=123: x=92..94 */
+    0x7000,  /* y=124: x=92..94 */
+    0x7FC0,  /* y=125: x=86..94 */
+    0x7FFF,  /* y=126: x=80..94 */
+    0x7FFF,  /* y=127: x=80..94 */
+    0x1FF8,  /* y=128: x=83..92 */
+    0x0FF0,  /* y=129: x=84..91 */
+    0x0FF0,  /* y=130: x=84..91 */
+};
+
+/* 显示 120x108 头像位图 (1bit/pixel, MSB-first) */
+void LCD_ShowAvatar(u16 x, u16 y)
+{
+    g_avatar_x = x;
+    g_avatar_y = y;
+    g_eyes_closed = 0;   /* 初始睁眼 */
+    g_mouth_open  = 0;   /* 初始闭嘴 */
+    for (int row = 0; row < AVATAR_H; row++) {
+        for (int col = 0; col < AVATAR_W; col++) {
+            if (face_avatar[row][col >> 3] & (0x80 >> (col & 7))) {
+                LCD_Fast_DrawPoint(x + col, y + row, WHITE);
+            }
+        }
+    }
+}
+
+/* 重绘头像某个矩形区域 (从位图, 眨眼后恢复) */
+static void LCD_AvatarRegion(u8 rx0, u8 ry0, u8 rx1, u8 ry1)
+{
+    for (int row = ry0; row <= ry1; row++) {
+        for (int col = rx0; col <= rx1; col++) {
+            if (face_avatar[row][col >> 3] & (0x80 >> (col & 7))) {
+                LCD_Fast_DrawPoint(g_avatar_x + col, g_avatar_y + row, WHITE);
+            }
+        }
+    }
+}
+
+/* 闭眼: 擦除眼睛区域, 画一条细线 */
+static void LCD_BlinkEye(u8 rx0, u8 ry0, u8 rx1, u8 ry1)
+{
+    LCD_Fill(g_avatar_x + rx0, g_avatar_y + ry0,
+             g_avatar_x + rx1, g_avatar_y + ry1, BLACK);
+    u16 cy = g_avatar_y + (ry0 + ry1) / 2;
+    LCD_Fill(g_avatar_x + rx0, cy - 1, g_avatar_x + rx1, cy + 1, WHITE);
+}
+
+/* 张嘴: 画白色嘴巴 (说话状态) */
+static void LCD_MouthOpen(void)
+{
+    for (int row = 0; row < AVMOUTH_H; row++) {
+        u16 bits = av_mouth_shape[row];
+        for (int x = 0; x < AVMOUTH_W; x++) {
+            if (bits & (1 << x)) {
+                LCD_Fast_DrawPoint(g_avatar_x + AVMOUTH_X0 + x, g_avatar_y + AVMOUTH_Y0 + row, WHITE);
+            }
+        }
+    }
+}
+
+/* 闭嘴: 擦除嘴巴 (恢复黑色) */
+static void LCD_MouthClose(void)
+{
+    for (int row = 0; row < AVMOUTH_H; row++) {
+        u16 bits = av_mouth_shape[row];
+        for (int x = 0; x < AVMOUTH_W; x++) {
+            if (bits & (1 << x)) {
+                LCD_Fast_DrawPoint(g_avatar_x + AVMOUTH_X0 + x, g_avatar_y + AVMOUTH_Y0 + row, BLACK);
+            }
+        }
+    }
+}
+
+/* LCD 轮询 (主循环调用): 中文3秒变"..." + 头像眨眼/说话 */
+void LCD_Poll(void)
+{
+    /* 显示中文6秒后变"..." */
+    if (g_lcd_show_active && (msTicks - g_lcd_show_start) > 6000) {
+        LCD_DrawDots();
+        g_lcd_show_active = 0;
+    }
+
+    /* 眨眼: 每3秒闭眼120ms */
+    u8 should_close = ((msTicks % 3000) >= 2500 && (msTicks % 3000) < 2620);
+    if (should_close != g_eyes_closed) {
+        g_eyes_closed = should_close;
+        if (should_close) {
+            LCD_BlinkEye(LEYE_X0, LEYE_Y0, LEYE_X1, LEYE_Y1);
+            LCD_BlinkEye(REYE_X0, REYE_Y0, REYE_X1, REYE_Y1);
+        } else {
+            LCD_AvatarRegion(LEYE_X0, LEYE_Y0, LEYE_X1, LEYE_Y1);
+            LCD_AvatarRegion(REYE_X0, REYE_Y0, REYE_X1, REYE_Y1);
+        }
+    }
+
+    /* 说话: 仅在显示文字的前半段时间内, 嘴巴每秒张合2次 */
+    u8 mouth_open = 0;
+    if (g_lcd_show_active && (msTicks - g_lcd_show_start) < 3000) {
+        mouth_open = ((msTicks % 500) < 150);
+    }
+    if (mouth_open != g_mouth_open) {
+        g_mouth_open = mouth_open;
+        if (mouth_open) LCD_MouthOpen();
+        else            LCD_MouthClose();
+    }
 }
 
 

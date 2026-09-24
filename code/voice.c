@@ -7,6 +7,7 @@
 
 #include "voice.h"
 #include "headfile.h"
+#include <string.h>
 
 /* ==================================================================
  *                        UART 发送
@@ -16,7 +17,8 @@ static volatile uint8_t g_uart1_tx_done = 1;
 
 static void voice_wait_tx(void)
 {
-    while (!g_uart1_tx_done) {
+    uint32_t timeout = 100000;  /* 超时保护, 防止语音模块未连接时死锁 */
+    while (!g_uart1_tx_done && --timeout) {
         ;
     }
     g_uart1_tx_done = 0;
@@ -53,6 +55,45 @@ void voice_send_string(const char *str)
     voice_send_raw(str);
     voice_send_char('\r');
     voice_send_char('\n');
+
+    /* 播报后设置盲区: 防止麦克风拾取播报声形成反馈循环。
+       覆盖所有播报路径(语音命令/关柜门/NFC等), 统一在这里屏蔽识别。 */
+    g_voice_blind_until = msTicks + VOICE_BLIND_MS;
+}
+
+/* ==================================================================
+ *                        延迟播报队列 (非阻塞)
+ * 用于"先播报 A, 2~3秒后再播报 B", 避免 B 打断 A
+ * ================================================================== */
+#define VOICE_PENDING_MAX  4
+typedef struct {
+    char     str[16];
+    uint32_t send_time;   /* 到点发送的时间戳 (msTicks) */
+} voice_pending_t;
+
+static voice_pending_t g_voice_pending[VOICE_PENDING_MAX];
+static int             g_voice_pending_cnt = 0;
+
+void voice_send_delayed(const char *str, uint32_t delay_ms)
+{
+    if (NULL == str || g_voice_pending_cnt >= VOICE_PENDING_MAX) return;
+    strncpy(g_voice_pending[g_voice_pending_cnt].str, str, 15);
+    g_voice_pending[g_voice_pending_cnt].str[15] = '\0';
+    g_voice_pending[g_voice_pending_cnt].send_time = msTicks + delay_ms;
+    g_voice_pending_cnt++;
+}
+
+void voice_pending_poll(void)
+{
+    for (int i = 0; i < g_voice_pending_cnt; ) {
+        if (msTicks >= g_voice_pending[i].send_time) {
+            voice_send_string(g_voice_pending[i].str);
+            g_voice_pending[i] = g_voice_pending[g_voice_pending_cnt - 1];  /* 尾元素填补 */
+            g_voice_pending_cnt--;
+        } else {
+            i++;
+        }
+    }
 }
 
 /**

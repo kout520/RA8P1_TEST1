@@ -378,7 +378,7 @@
     <node id="board.clock.lcdclk.source" option="board.clock.lcdclk.source.disabled"/>
     <node id="board.clock.lcdclk.div" option="board.clock.lcdclk.div.2"/>
     <node id="board.clock.lcdclk.display" option="board.clock.lcdclk.display.value"/>
-    <node id="board.clock.i3cclk.source" option="board.clock.i3cclk.source.disabled"/>
+    <node id="board.clock.i3cclk.source" option="board.clock.i3cclk.source.moco"/>
     <node id="board.clock.i3cclk.div" option="board.clock.i3cclk.div.4"/>
     <node id="board.clock.i3cclk.display" option="board.clock.i3cclk.display.value"/>
     <node id="board.clock.uck.source" option="board.clock.uck.source.disabled"/>
@@ -516,7 +516,7 @@
       <property id="module.driver.ceu.capture_format" value="module.driver.ceu.capture_format.data_synchronous"/>
       <property id="module.driver.ceu.bus_size" value="module.driver.ceu.bus_size.8_bit"/>
       <property id="module.driver.ceu.hsync_polarity" value="module.driver.ceu.hsync_polarity.high"/>
-      <property id="module.driver.ceu.vsync_polarity" value="module.driver.ceu.vsync_polarity.high"/>
+      <property id="module.driver.ceu.vsync_polarity" value="module.driver.ceu.vsync_polarity.low"/>
       <property id="module.driver.ceu.input_order" value="module.driver.ceu.input_order.cb0y0cr0y1"/>
       <property id="module.driver.ceu.byte_swapping" value="module.driver.ceu.swap_bits.8bit_units,module.driver.ceu.swap_bits.16bit_units,module.driver.ceu.swap_bits.32bit_units"/>
       <property id="module.driver.ceu.burst_mode" value="module.driver.ceu.burst_mode.x8"/>
@@ -1105,6 +1105,8 @@
       <configSetting altId="p707.gpio_mode.gpio_mode_peripheral" configurationId="p707.gpio_mode"/>
       <configSetting altId="p708.ceu.vio_vd" configurationId="p708"/>
       <configSetting altId="p708.gpio_mode.gpio_mode_peripheral" configurationId="p708.gpio_mode"/>
+      <configSetting altId="p711.output.high" configurationId="p711"/>
+      <configSetting altId="p711.gpio_mode.gpio_mode_out.high" configurationId="p711.gpio_mode"/>
       <configSetting altId="p713.gpt2.gtioc2a" configurationId="p713"/>
       <configSetting altId="p713.gpio_mode.gpio_mode_peripheral" configurationId="p713.gpio_mode"/>
       <configSetting altId="p715.output.low" configurationId="p715"/>

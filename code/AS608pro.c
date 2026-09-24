@@ -35,9 +35,29 @@ static volatile uint32_t rx_timeout_counter = 0;
  *                        应用层函数
  * ================================================================== */
 
+/* 刷新指纹数量到串口屏 t50 控件 (添加/删除后调用) */
+void fp_refresh_count(void)
+{
+    uint8_t cnt = AS608_GetFRNumber();
+    char buf[32];
+    sprintf(buf, "t50.txt=\"%d\"", cnt);
+    tjc_send_string(buf);
+    printf("指纹数量刷新: %d\r\n", cnt);
+}
+
+/* 设置 t51 指纹添加状态控件文本 (添加中/确认中/添加完成/添加失败) */
+static void fp_set_status(const char *msg)
+{
+    char buf[40];
+    sprintf(buf, "t51.txt=\"%s\"", msg);
+    tjc_send_string(buf);
+}
+
 // 交互式录入指纹
 void finger_addtion(void)
 {
+    fp_set_status("添加中");
+
     // 等待 5 秒，检测是否要录入指纹
     bool add_mode = false;
     for(uint8_t i = 0; i < 5; i++)  // 5x1s = 5 秒
@@ -82,8 +102,13 @@ void finger_addtion(void)
             R_BSP_SoftwareDelay(300, BSP_DELAY_UNITS_MILLISECONDS);
         }
 
-        if(!first_success)
+        if(first_success)
         {
+            fp_set_status("添加完成");
+        }
+        else
+        {
+            fp_set_status("添加失败");
             printf(">>> Enrollment timeout or failed! <<<\r\n\r\n");
         }
 
@@ -91,45 +116,75 @@ void finger_addtion(void)
     }
     else
     {
+        fp_set_status("添加失败");
         printf(">>> Skipping enrollment, entering verification mode <<<\r\n\r\n");
     }
+
+    fp_refresh_count();  /* 添加结束, 刷新指纹数量 t50 */
 }
 
-// 刷指纹验证
+// 刷指纹验证 (非阻塞, 每次主循环调用一次, 类似 PN532_connect)
 void finger_search(void)
 {
-    uint16_t matched_id = 0;
-    uint8_t result1 = AS608_PressFR(&matched_id);
+    static uint8_t  cooldown = 0;   /* 失败后冷却计数, 单位: 调用次数 */
+    #define FP_COOLDOWN_MAX  50     /* ~3s @ 60ms/loop */
 
-    switch(result1)
-    {
-        case 1:  // 验证成功
-            printf(">>> Fingerprint MATCHED! ID=%d <<<\r\n\r\n", matched_id);
-            // 根据匹配 ID 执行不同操作
-            if (matched_id == 1) {
-
-            } else if (matched_id == 2) {
-
-            } else if (matched_id == 3) {
-
-            } else {
-                printf("Hello User %d\r\n", matched_id);
-            }
-            break;
-
-        case 2:  // 验证失败
-            printf("Fingerprint verification failed\r\n");
-            R_BSP_SoftwareDelay(1000, BSP_DELAY_UNITS_MILLISECONDS);
-            break;
-
-        case 0:  // 手指未松开
-        case 3:  // 无手指
-        default:
-            // 不处理，等待下次刷指纹
-            break;
+    if (cooldown > 0) {
+        cooldown--;
+        return;
     }
 
-    R_BSP_SoftwareDelay(10, BSP_DELAY_UNITS_MILLISECONDS);
+    uint16_t matched_id = 0;
+    uint8_t  result1     = AS608_PressFR(&matched_id);
+
+    switch (result1) {
+    case 1:  /* 验证成功 — 页1=张三, 页2=李四, 页3=王五 (老六走NFC卡, 无指纹槽) */
+        printf(">>> Fingerprint MATCHED! ID=%d <<<\r\n\r\n", matched_id);
+        if (matched_id == 1) {
+            tjc_send_string("va0.val=1");
+            esp32_send_attendance(1);            /* @1 → 张三 */
+            voice_send_attendance(1);            /* 语音: 员工张三已打卡 */
+            LCD_ShowMsg(1);                      /* LCD: 员工张三已打卡 */
+            g_current_user = 1;
+            auth_start();   /* 记录认证时间戳, 启动70秒超时退出 */
+            esp32_show_points(1);
+            printf(" zhang san \r\n");
+        } else if (matched_id == 2) {
+            tjc_send_string("va0.val=2");
+            esp32_send_attendance(2);            /* @2 → 李四 */
+            voice_send_attendance(2);            /* 语音: 员工李四已打卡 */
+            LCD_ShowMsg(2);                      /* LCD: 员工李四已打卡 */
+            g_current_user = 2;
+            auth_start();   /* 记录认证时间戳, 启动70秒超时退出 */
+            esp32_show_points(2);
+            printf(" li shi \r\n");
+        } else if (matched_id == 3) {
+            tjc_send_string("va0.val=3");
+            esp32_send_attendance(3);            /* @3 → 王五 */
+            voice_send_attendance(3);            /* 语音: 员工王五已打卡 */
+            LCD_ShowMsg(3);                      /* LCD: 员工王五已打卡 */
+            g_current_user = 3;
+            auth_start();   /* 记录认证时间戳, 启动70秒超时退出 */
+            esp32_show_points(3);
+            printf(" wang wu \r\n");
+        } else {
+            printf(" unknown user \r\n");
+        }
+        break;
+
+    case 2:  /* 验证失败 — 通知串口屏, 冷却 3s 防止快速重试 */
+        printf("Fingerprint verification failed\r\n");
+        tjc_send_string("va0.val=10");
+        voice_send_string("@4");            /* 语音: 打卡失败, 请重试 */
+        LCD_ShowMsg(4);                     /* LCD: 打卡失败，请重试 */
+        cooldown = FP_COOLDOWN_MAX;
+        break;
+
+    case 0:  /* 手指未松开 */
+    case 3:  /* 无手指 */
+    default:
+        break;
+    }
 }
 
 /* ==================================================================
@@ -696,6 +751,36 @@ uint8_t PS_ValidTempleteNum(uint16_t *ValidN)
     return ensure;
 }
 
+// 读模板索引表
+// 功能: 读取指纹库索引表, 返回 32 字节位图 (bit=1 表示对应页已录入模板)
+// 参数: IndexTable[32] (输出)
+uint8_t PS_ReadIndexTable(uint8_t *IndexTable)
+{
+    uint16_t temp;
+    uint8_t  ensure;
+    uint8_t  *data;
+    uint8_t  i;
+    SendHead();
+    SendAddr();
+    SendFlag(0x01);
+    SendLength(0x03);
+    Sendcmd(0x1F);
+    temp = 0x01+0x03+0x1F;
+    SendCheck(temp);
+    data=JudgeStr(200);
+    if(data)
+    {
+        ensure=data[9];
+        for(i=0;i<32;i++)
+        {
+            IndexTable[i]=data[10+i];
+        }
+    }
+    else
+        ensure=0xFF;
+    return ensure;
+}
+
 // 与 AS608 模块握手
 // 参数: PS_Addr 地址指针
 // 说明: 模块返回新地址(正确地址)
@@ -774,13 +859,15 @@ void AS608_Check(void)
  */
 uint8_t AS608_PressFR(uint16_t *matched_id)
 {
-    static uint8_t press_state = 0;     /* 指纹按压状态 */
+    static uint8_t press_state  = 0;  /* 指纹按压状态 */
+    static uint8_t debounce_cnt = 0;  /* 非阻塞消抖计数 */
 
-    /* 去抖: 连续两次读到高电平才确认手指按下 */
-    if(PS_Sta && press_state == 0)
-    {
-        R_BSP_SoftwareDelay(10, BSP_DELAY_UNITS_MILLISECONDS);
-        if(!PS_Sta) return 0x03;  /* 抖动, 忽略 */
+    /* 非阻塞消抖: 连续 2 次读到高电平才确认手指按下 */
+    if (PS_Sta && press_state == 0) {
+        debounce_cnt++;
+        if (debounce_cnt < 2) return 0x03;  /* 抖动中, 继续等待 */
+    } else {
+        debounce_cnt = 0;
     }
 
     if(PS_Sta && press_state == 0)      /* PS_Sta 高电平为手指按下 */
@@ -819,6 +906,30 @@ uint8_t AS608_PressFR(uint16_t *matched_id)
     }
     return 0x03;
 }
+#define FP_SLOT_COUNT  3   /* 指纹槽位: 页1=张三, 页2=李四, 页3=王五 (老六走NFC卡) */
+
+/**
+ * @brief   查找第一个空闲槽位页号 (页1~3)
+ * @param   none
+ * @retval  空闲页号 (1~3), 0=3个槽位全满或读索引表失败
+ */
+static uint16_t fp_find_free_page(void)
+{
+    uint8_t table[32];
+    if (PS_ReadIndexTable(table) != 0x00) {
+        return 0;  /* 读索引表失败 */
+    }
+    for (uint16_t page = 1; page <= FP_SLOT_COUNT; page++) {
+        uint16_t byte_idx = page / 8;
+        uint8_t  bit      = (uint8_t)(page % 8);
+        if (byte_idx >= 32) break;
+        if ((table[byte_idx] & (1u << bit)) == 0) {
+            return page;  /* 该槽位空闲 */
+        }
+    }
+    return 0;  /* 3个槽位全满 */
+}
+
 /**
  * @brief   录入指纹
  * @param   none
@@ -836,6 +947,8 @@ uint8_t AS608_AddFR(void)
             ensure=PS_GenChar(CharBuffer1);         /* 指纹特征 1 */
             if(ensure==0x00)
             {
+                fp_set_status("确认中");              /* 第一次录入成功, 等待再次确认 */
+
                 /* 第二次按指纹前，检测手指是否松开再按下 */
                 if(PS_Sta)
                 {
@@ -851,10 +964,16 @@ uint8_t AS608_AddFR(void)
                                 ensure=PS_RegModel();   /* 生成指纹模板 */
                                 if(ensure==0x00)
                                 {
-                                    PS_ValidTempleteNum(&ValidN);               /* 获取指纹个数 */
-                                    ensure=PS_StoreChar(CharBuffer2, ValidN + 1);/* 储存模板 */
+                                    /* 找第一个空闲槽位存储 (页1=张三/页2=李四/页3=王五) */
+                                    uint16_t page_id = fp_find_free_page();
+                                    if (page_id == 0) {
+                                        printf("指纹槽位已满 (张三/李四/王五)\r\n");
+                                        return 0x00;   /* 3个槽位全满, 录入失败 */
+                                    }
+                                    ensure=PS_StoreChar(CharBuffer2, page_id);/* 储存模板 */
                                     if(ensure == 0x00)
                                     {
+                                        printf("指纹已录入到第 %d 页\r\n", page_id);
                                         return 0x01;    /* 录入成功 */
                                     }
                                 }

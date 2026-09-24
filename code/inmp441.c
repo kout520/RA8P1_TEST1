@@ -51,8 +51,8 @@ static volatile bool g_capture_running = false;
  *        DC 阻隔滤波器状态 (跨缓冲区连续, 消除块边界跳变)
  * ================================================================== */
 
-/** 数字增益: INMP441 灵敏度低(-26dBFS@94dB), 8x=+18dB */
-#define INMP441_DIGITAL_GAIN  8
+/** 数字增益: INMP441 灵敏度低(-26dBFS@94dB), 6x=+15.6dB (8x 会让爆破音如"打卡"削波) */
+#define INMP441_DIGITAL_GAIN  6
 
 /** DC 阻隔滤波器系数 (一阶高通, fc≈13Hz@16.7kHz)
  *  y[n] = x[n] - x[n-1] + R * y[n-1]
@@ -229,6 +229,11 @@ fsp_err_t inmp441_init(void)
     }
     printf("INMP441: SSI1 I2S opened\r\n");
 
+    /* 强制 SSI 使用外部时钟 (CKS=0), 绕过 FSP 生成问题 */
+    R_SSI1->SSICR &= ~R_SSI0_SSICR_CKS_Msk;
+    printf("INMP441: CKS forced to EXTERNAL (SSICR=0x%08lX)\r\n",
+           R_SSI1->SSICR);
+
     /* --- 3. 双缓冲初始化 --- */
     g_buf_active_idx = 0;
     g_buf_ready_idx  = -1;
@@ -269,8 +274,21 @@ fsp_err_t inmp441_init(void)
  */
 int16_t * inmp441_get_buffer(void)
 {
+    static int no_data_cnt = 0;
+
     int ready = g_buf_ready_idx;
-    if (ready < 0) return NULL;
+    if (ready < 0) {
+        /* 连续无数据 → DMA 链可能断裂, 自动重启 */
+        no_data_cnt++;
+        if (no_data_cnt >= 100) {  /* 约 3 秒无音频数据 */
+            printf("INMP441: DMA stalled, restarting capture...\r\n");
+            inmp441_start_read(g_buf_active_idx);
+            no_data_cnt = 0;
+        }
+        return NULL;
+    }
+
+    no_data_cnt = 0;
 
     /* 将原始数据转换为 16-bit 单声道采样 */
     process_completed_buffer(ready);

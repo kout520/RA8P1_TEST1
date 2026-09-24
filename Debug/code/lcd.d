@@ -76,7 +76,7 @@ code/lcd.o: ../code/lcd.c ../code/lcd.h \
  D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/api/r_capture_api.h \
  D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/instances/r_ceu.h \
  D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/instances/r_ceu.h ../code/font.h \
- ../code/text.h
+ ../code/text.h ../code/font16.h ../code/face_avatar.h
 ../code/lcd.h:
 D:/e2_workplace/RA8P1_TEST1/ra_gen/hal_data.h:
 D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/api/bsp_api.h:
@@ -157,3 +157,5 @@ D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/instances/r_ceu.h:
 D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/instances/r_ceu.h:
 ../code/font.h:
 ../code/text.h:
+../code/font16.h:
+../code/face_avatar.h:

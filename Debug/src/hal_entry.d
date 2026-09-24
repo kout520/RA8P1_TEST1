@@ -88,7 +88,9 @@ src/hal_entry.o: ../src/hal_entry.c \
  D:/e2_workplace/RA8P1_TEST1/code/voice.h \
  D:/e2_workplace/RA8P1_TEST1/code/inmp441.h \
  D:/e2_workplace/RA8P1_TEST1/code/mfcc_engine.h \
- D:/e2_workplace/RA8P1_TEST1/code/voice_cmd.h
+ D:/e2_workplace/RA8P1_TEST1/code/voice_cmd.h \
+ D:/e2_workplace/RA8P1_TEST1/code/speaker_verify.h \
+ D:/e2_workplace/RA8P1_TEST1/code/command_dispatch.h
 D:/e2_workplace/RA8P1_TEST1/ra_gen/hal_data.h:
 D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/api/bsp_api.h:
 D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/api/fsp_common_api.h:
@@ -179,3 +181,5 @@ D:/e2_workplace/RA8P1_TEST1/code/voice.h:
 D:/e2_workplace/RA8P1_TEST1/code/inmp441.h:
 D:/e2_workplace/RA8P1_TEST1/code/mfcc_engine.h:
 D:/e2_workplace/RA8P1_TEST1/code/voice_cmd.h:
+D:/e2_workplace/RA8P1_TEST1/code/speaker_verify.h:
+D:/e2_workplace/RA8P1_TEST1/code/command_dispatch.h:

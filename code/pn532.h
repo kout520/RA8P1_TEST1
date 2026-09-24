@@ -274,6 +274,9 @@ void PN532_INIT(void);
 void PN532_connect(void);
 void g_system_tick(void);
 
+/* NFC 读取页模式 (串口屏 0x19 进入 / 0x1A 退出): 1=只读卡 UID 显示到 t52, 不做打卡匹配 */
+extern volatile uint8_t g_nfc_read_mode;
+
 // 配置 SAM (Secure Access Module)
 uint8_t PN532_SetSamConfig(uint8_t mode, uint8_t timeout, uint8_t use_irq);
 // 获取固件版本

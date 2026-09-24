@@ -47,12 +47,18 @@ void i2c_master0_callback(i2c_master_callback_args_t *p_args)
 /* ===== CEU 回调 ===== */
 void ceu_callback(capture_callback_args_t *p_args)
 {
+    static int cb_count = 0;
+    if (NULL == p_args) return;
+    /* Log first 3 callbacks to confirm CEU interrupt is firing */
+    if (cb_count < 3) {
+        printf("CEU: cb event=0x%02X count=%d\r\n", (unsigned)p_args->event, cb_count);
+        cb_count++;
+    }
     if (CEU_EVENT_FRAME_END == p_args->event)
     {
         g_ceu_frame_done = true;
         g_frame.frame_ready = true;
-
-        g_capture_complete= true;
+        g_capture_complete = true;
     }
 }
 
@@ -248,8 +254,9 @@ fsp_err_t ov5640_set_output_format(ov5640_output_format_t format)
                   sizeof(ov5640_rgb565_reg_table) / sizeof(ov5640_rgb565_reg_table[0]));
             break;
         case OV5640_FORMAT_YUV422:
+            /* 0x501F=00 ISP disable, 0x4300=32 → UYVY (match CEU CB0Y0CR0Y1) */
             err  = ov5640_write_reg(0x501F, 0x00);
-            err |= ov5640_write_reg(0x4300, 0x30);
+            err |= ov5640_write_reg(0x4300, 0x32);
             break;
         case OV5640_FORMAT_JPEG:
             err  = ov5640_write_reg(0x501F, 0x00);
@@ -492,6 +499,8 @@ fsp_err_t ov5640_init(void)
     err = ov5640_set_output_format(OV5640_FORMAT_RGB565);
     if (FSP_SUCCESS != err) return err;
 
+    /* CEU 在首次 capture_start 时打开 (对齐正常运行例程, 避免过早 open 影响其他外设) */
+
     /* 初始化帧信息 */
     g_frame.format = OV5640_FORMAT_RGB565;
     g_frame.frame_ready = false;
@@ -518,16 +527,19 @@ fsp_err_t ov5640_capture_start(uint8_t *p_buffer, uint32_t buffer_size)
 {
     (void)buffer_size;
 
-    if (NULL == p_buffer)
-    {
-        return FSP_ERR_INVALID_POINTER;
-    }
+    if (NULL == p_buffer) return FSP_ERR_INVALID_POINTER;
 
-    g_frame.buffer = p_buffer;
+    g_frame.buffer      = p_buffer;
+    g_frame.size        = buffer_size;
     g_frame.frame_ready = false;
-    g_ceu_frame_done = false;
+    g_ceu_frame_done    = false;
+    g_capture_complete  = false;
 
-    return FSP_SUCCESS;
+    fsp_err_t err = g_ceu0.p_api->captureStart(g_ceu0.p_ctrl, p_buffer);
+    if (FSP_SUCCESS != err) {
+        printf("OV5640: captureStart failed (%d)\r\n", err);
+    }
+    return err;
 }
 
 /* ===== 等待帧完成 ===== */

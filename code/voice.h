@@ -28,4 +28,10 @@ void voice_send_attendance(uint8_t id);
 /** 发送原始字符串到语音模块 */
 void voice_send_string(const char *str);
 
+/** 延迟播报: delay_ms 后发送 (避免打断上一条正在播报的语音) */
+void voice_send_delayed(const char *str, uint32_t delay_ms);
+
+/** 发送到期的延迟播报 (主循环调用) */
+void voice_pending_poll(void);
+
 #endif /* __VOICE_H__ */

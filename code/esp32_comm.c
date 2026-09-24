@@ -12,6 +12,7 @@
 
 #include "esp32_comm.h"
 #include "headfile.h"
+#include "speaker_verify.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -73,7 +74,8 @@ static volatile uint8_t g_uart3_tx_done = 1;
 
 static void esp32_wait_tx(void)
 {
-    while (!g_uart3_tx_done) {
+    uint32_t timeout = 100000;  /* safety timeout ~100ms */
+    while (!g_uart3_tx_done && --timeout) {
         ;
     }
     g_uart3_tx_done = 0;
@@ -157,6 +159,142 @@ static uint8_t  g_sync_hour   = 0;
 static uint8_t  g_sync_minute = 0;
 static uint8_t  g_sync_second = 0;
 
+/* K230 物品库存 (ESP32 转发) */
+static int g_k230_cola   = 0;
+static int g_k230_sprite = 0;
+static int g_k230_milk   = 0;
+
+/* 上一次库存值 (用于检测减少 → 物品被取走) */
+static int g_k230_cola_prev   = -1;
+static int g_k230_sprite_prev = -1;
+static int g_k230_milk_prev   = -1;
+
+/* 用户积分余额: index 1-4 (张三/李四/王五/老六)
+   默认 0 (未联网时安全值), 联网后由网站 @P 同步真实积分 */
+static int g_user_points[5] = {0, 0, 0, 0, 0};
+
+/* 物品积分价格: C=可乐5分, S=宏宝莱5分, M=牛奶10分 */
+static int item_price(char item_code)
+{
+    switch (item_code) {
+        case 'C': return 5;
+        case 'S': return 5;   /* 宏宝莱 */
+        case 'M': return 10;
+        default:  return 0;
+    }
+}
+
+static const char *item_name_cn(char item_code)
+{
+    switch (item_code) {
+        case 'C': return "可乐";
+        case 'S': return "宏宝莱";
+        case 'M': return "牛奶";
+        default:  return "未知";
+    }
+}
+
+/* 上报 "谁取走了什么" 给 ESP32 → 网站 */
+static void report_item_taken(char item_code)
+{
+    if (g_current_user <= 0) {
+        /* 未识别身份就取物 → 语音警告 @5 + 通知 ESP32 发微信 @U */
+        voice_send_string("@5");
+        LCD_ShowMsg(5);   /* LCD: 你的信息未录入此系统，取物失败 */
+        esp32_send_string("@U");
+        printf(">>> 未授权取物! 物品 %s, 语音告警\r\n", item_name_cn(item_code));
+        return;
+    }
+
+    int price = item_price(item_code);
+
+    /* 积分不足 → @10 语音提醒, 不扣积分 */
+    if (g_user_points[g_current_user] < price) {
+        voice_send_string("@10");
+        LCD_ShowMsg(10);   /* LCD: 您的积分不足，请充值或明天再来 */
+        printf(">>> 用户%d 积分不足, 无法取 %s (余额%d)\r\n",
+               g_current_user, item_name_cn(item_code), g_user_points[g_current_user]);
+        return;
+    }
+
+    g_user_points[g_current_user] -= price;
+
+    /* 语音播报: @7=可乐 @8=宏宝莱 @9=牛奶 */
+    switch (item_code) {
+    case 'C': voice_send_string("@7"); LCD_ShowMsg(7); break;   /* 你已取走可乐，减五积分 */
+    case 'S': voice_send_string("@8"); LCD_ShowMsg(8); break;   /* 你已取走宏宝莱，减五积分 */
+    case 'M': voice_send_string("@9"); LCD_ShowMsg(9); break;   /* 你已取走牛奶，减十积分 */
+    default: break;
+    }
+
+    /* 发 @T:用户:物品:扣分 给 ESP32 → 网站同步扣分 */
+    char buf[24];
+    sprintf(buf, "@T:%d:%c:%d", g_current_user, item_code, price);
+    esp32_send_string(buf);
+
+    /* 跳转个人信息页 + 显示积分余额 */
+    tjc_send_string("va0.val=11");
+    esp32_show_points(g_current_user);  /* 内部带延迟, 等跳页完成再发积分 */
+
+    printf(">>> 用户%d 取走 %s, 扣%d分, 余额%d\r\n",
+           g_current_user, item_name_cn(item_code), price, g_user_points[g_current_user]);
+    /* 不在此清除 g_current_user — 认证持续到关闭柜门,
+       允许一次开柜门周期内连续取多个物品 */
+}
+
+/* 上报 "谁放回了什么" 给 ESP32 → 网站加积分 (取走又放回 → 净0, 多放 → 加积分) */
+static void report_item_returned(char item_code)
+{
+    if (g_current_user <= 0) {
+        /* 未认证, 不知道谁放回, 不记积分 */
+        printf(">>> 未认证放回 %s, 不记积分\r\n", item_name_cn(item_code));
+        return;
+    }
+
+    int price = item_price(item_code);
+
+    /* 发 @B:用户:物品:加分 给 ESP32 → 网站同步加积分 */
+    char buf[24];
+    sprintf(buf, "@B:%d:%c:%d", g_current_user, item_code, price);
+    esp32_send_string(buf);
+
+    g_user_points[g_current_user] += price;   /* 主控同步加积分 (会被网站 @P 覆盖校准) */
+
+    printf(">>> 用户%d 放回 %s, 加%d分, 余额%d\r\n",
+           g_current_user, item_name_cn(item_code), price, g_user_points[g_current_user]);
+}
+
+/* 显示指定用户的积分余额到串口屏 t66 (认证成功/取物后调用) */
+void esp32_show_points(int user)
+{
+    if (user < 1 || user > 4) return;
+    char pts[20];
+    sprintf(pts, "t66.txt=\"%d\"", g_user_points[user]);
+    tjc_send_delayed(pts, 300);  /* 非阻塞: 延迟300ms后发送, 等跳页完成 */
+    printf(">>> 显示用户%d余额=%d\r\n", user, g_user_points[user]);
+}
+
+/* 刷新库存显示到串口屏 t60/t61/t62 (进入库存页面时调用) */
+void esp32_refresh_inventory(void)
+{
+    char buf[20];
+    sprintf(buf, "t60.txt=\"%d\"", g_k230_sprite);  /* 宏宝莱 → t60 */
+    tjc_send_delayed(buf, 300);  /* 非阻塞延迟发送 */
+    sprintf(buf, "t61.txt=\"%d\"", g_k230_cola);     /* 可乐 → t61 */
+    tjc_send_delayed(buf, 300);
+    sprintf(buf, "t62.txt=\"%d\"", g_k230_milk);     /* 牛奶 → t62 */
+    tjc_send_delayed(buf, 300);
+
+    /* 柜里没有任何物品 → @11 语音提醒 (每次刷新时检测, 不持续发送) */
+    if (g_k230_sprite <= 0 && g_k230_cola <= 0 && g_k230_milk <= 0) {
+        voice_send_string("@11");
+        LCD_ShowMsg(11);   /* LCD: 库存无货，请下次再来 */
+    }
+
+    printf(">>> 刷新库存: 宏宝莱=%d 可乐=%d 牛奶=%d\r\n",
+           g_k230_sprite, g_k230_cola, g_k230_milk);
+}
+
 /* ==================================================================
  *                        接收解析 (ESP32 → RA8)
  * ================================================================== */
@@ -165,7 +303,7 @@ static uint8_t  g_sync_second = 0;
 static void rtc_calibrate_date(uint16_t year, uint8_t month, uint8_t day);
 static void rtc_calibrate_time(uint8_t hour, uint8_t min, uint8_t sec);
 
-#define ESP32_LINE_BUF_LEN  200
+#define ESP32_LINE_BUF_LEN  1024
 static char    esp32_line_buf[ESP32_LINE_BUF_LEN];
 
 /**
@@ -198,7 +336,35 @@ static void esp32_parse_line(const char *line)
 {
     if (NULL == line || line[0] == '\0') return;
 
-    printf("ESP32 RX: %s\r\n", line);
+    //printf("ESP32 RX: %s\r\n", line);
+
+    /* --- 声纹同步: @SPK:hex数据 (ESP32 → 主控, 断电恢复) --- */
+    if (0 == strncmp(line, "@SPK:", 5)) {
+        if (speaker_import_hex(&line[5])) {
+            printf(">>> SPK: 声纹已从 ESP32 恢复\r\n");
+        } else {
+            printf(">>> SPK: 声纹解析失败\r\n");
+        }
+        return;
+    }
+
+    /* --- 积分同步: @P:用户:余额 (网站 → ESP32 → 主控) --- */
+    if (0 == strncmp(line, "@P:", 3)) {
+        int user = 0, pts = 0;
+        if (2 == sscanf(line, "@P:%d:%d", &user, &pts) && user >= 1 && user <= 4) {
+            /* 仅积分真正变化时才打印 + 刷新, 心跳同步(值没变)静默跳过,
+               避免 printf 阻塞主循环影响音频采集和指令识别 */
+            if (g_user_points[user] != pts) {
+                g_user_points[user] = pts;
+                printf(">>> 积分同步: 用户%d 余额=%d\r\n", user, pts);
+                /* 若同步的是当前认证用户, 立即刷新串口屏 t66 (不用等下次进页面) */
+                if (g_current_user == user) {
+                    esp32_show_points(user);  /* 内部带 300ms 延时 */
+                }
+            }
+            return;
+        }
+    }
 
     /* --- LED 控制命令 (来自 MQTT) --- */
     if (0 == strcmp(line, "@g")) {
@@ -218,22 +384,83 @@ static void esp32_parse_line(const char *line)
     if (0 == strcmp(line, "@1")) {
         g_esp32_wifi_state = ESP32_WIFI_DISCONNECTED;
         g_esp32_cmd        = ESP32_CMD_WIFI_DOWN;
+        tjc_send_val("va1", "val", 0);  /* 网络断开 → va1.val=0 */
         printf(">>> ESP32: WiFi DISCONNECTED\r\n");
         return;
     }
     if (0 == strcmp(line, "@2")) {
         g_esp32_wifi_state = ESP32_WIFI_CONNECTED;
         g_esp32_cmd        = ESP32_CMD_WIFI_UP;
+        tjc_send_val("va1", "val", 1);  /* 网络连接 → va1.val=1 */
+        voice_send_string("@0");        /* 语音: 你好, 我叫小白, 很高兴为您服务 */
+        LCD_ShowMsg(0);                 /* LCD: 你好，我叫小白，很高兴为您服务 */
         printf(">>> ESP32: WiFi CONNECTED\r\n");
         return;
     }
 
-    /* --- 声纹识别结果: @VOICE:N --- */
-    if (0 == strncmp(line, "@VOICE:", 7)) {
-        int pid = 0;
-        if (1 == sscanf(line, "@VOICE:%d", &pid) && pid >= 1 && pid <= 6) {
-            printf(">>> ESP32: voice recognized ID=%d\r\n", pid);
-            attendance_check_in((uint8_t)pid);
+    /* --- K230 库存数据: COLA:N / SPRITE:N / MILK:N --- */
+    if (0 == strncmp(line, "COLA:", 5)) {
+        int val = 0;
+        if (1 == sscanf(line, "COLA:%d", &val) && val >= 0) {
+            /* 库存变化: 减少=取物, 增加=放回 */
+            if (g_k230_cola_prev >= 0) {
+                if (val < g_k230_cola_prev) {
+                    report_item_taken('C');
+                } else if (val > g_k230_cola_prev) {
+                    report_item_returned('C');
+                }
+            }
+            g_k230_cola_prev = val;
+            /* 只在库存变化时才更新串口屏+打印, 避免高频刷新阻塞主循环 */
+            if (val != g_k230_cola) {
+                char buf[16];
+                sprintf(buf, "t61.txt=\"%d\"", val);  /* 可乐库存 → t61 */
+                tjc_send_string(buf);
+                printf(">>> K230: cola stock=%d\r\n", val);
+            }
+            g_k230_cola = val;
+            return;
+        }
+    }
+    if (0 == strncmp(line, "SPRITE:", 7)) {
+        int val = 0;
+        if (1 == sscanf(line, "SPRITE:%d", &val) && val >= 0) {
+            if (g_k230_sprite_prev >= 0) {
+                if (val < g_k230_sprite_prev) {
+                    report_item_taken('S');
+                } else if (val > g_k230_sprite_prev) {
+                    report_item_returned('S');
+                }
+            }
+            g_k230_sprite_prev = val;
+            if (val != g_k230_sprite) {
+                char buf[16];
+                sprintf(buf, "t60.txt=\"%d\"", val);  /* 宏宝莱库存 → t60 */
+                tjc_send_string(buf);
+                printf(">>> K230: sprite stock=%d\r\n", val);
+            }
+            g_k230_sprite = val;
+            return;
+        }
+    }
+    if (0 == strncmp(line, "MILK:", 5)) {
+        int val = 0;
+        if (1 == sscanf(line, "MILK:%d", &val) && val >= 0) {
+            if (g_k230_milk_prev >= 0) {
+                if (val < g_k230_milk_prev) {
+                    report_item_taken('M');
+                } else if (val > g_k230_milk_prev) {
+                    report_item_returned('M');
+                }
+            }
+            g_k230_milk_prev = val;
+            if (val != g_k230_milk) {
+                char buf[16];
+                sprintf(buf, "t62.txt=\"%d\"", val);  /* 牛奶库存 → t62 */
+                tjc_send_string(buf);
+                printf(">>> K230: milk stock=%d\r\n", val);
+            }
+            g_k230_milk = val;
             return;
         }
     }
@@ -248,7 +475,14 @@ static void esp32_parse_line(const char *line)
                 g_sync_day   = (uint8_t)d;
                 g_esp32_cmd  = ESP32_CMD_DATE_SYNC;
                 rtc_calibrate_date((uint16_t)y, (uint8_t)mo, (uint8_t)d);
-                printf(">>> ESP32: date sync %04d-%02d-%02d\r\n", y, mo, d);
+                //printf(">>> ESP32: date sync %04d-%02d-%02d\r\n", y, mo, d);
+                // 合并时间刷新 TJC t8
+                {
+                    char buf[40];
+                    sprintf(buf, "t8.txt=\"%04d-%02d-%02d %02d:%02d:%02d\"",
+                            y, mo, d, g_sync_hour, g_sync_minute, g_sync_second);
+                    tjc_send_string(buf);
+                }
                 return;
             }
         }
@@ -263,7 +497,14 @@ static void esp32_parse_line(const char *line)
             g_sync_second = s;
             g_esp32_cmd   = ESP32_CMD_TIME_SYNC;
             rtc_calibrate_time(h, m, s);
-            printf(">>> ESP32: time sync %02d:%02d:%02d\r\n", h, m, s);
+            //printf(">>> ESP32: time sync %02d:%02d:%02d\r\n", h, m, s);
+            // 合并日期刷新 TJC t8
+            {
+                char buf[40];
+                sprintf(buf, "t8.txt=\"%04d-%02d-%02d %02d:%02d:%02d\"",
+                        g_sync_year, g_sync_month, g_sync_day, h, m, s);
+                tjc_send_string(buf);
+            }
             return;
         }
     }
@@ -326,7 +567,7 @@ void esp32_process(void)
     esp32_extract_lines();
 
     /* 缓冲区溢出保护 */
-    if (esp32_ringbuf_length() > 450) {
+    if (esp32_ringbuf_length() > 1800) {
         printf("ESP32: RX buffer overflow(%d bytes), cleared\r\n", esp32_ringbuf_length());
         esp32_ringbuf_init();
     }
@@ -372,6 +613,16 @@ void esp32_get_time(uint8_t *hour, uint8_t *minute, uint8_t *second)
 /**
  * 获取接收到的日期同步值
  */
+/**
+ * 获取 K230 库存数据 (由 ESP32 转发)
+ */
+void esp32_get_k230_stock(int *cola, int *sprite, int *milk)
+{
+    if (NULL != cola)   *cola   = g_k230_cola;
+    if (NULL != sprite) *sprite = g_k230_sprite;
+    if (NULL != milk)   *milk   = g_k230_milk;
+}
+
 void esp32_get_date(uint16_t *year, uint8_t *month, uint8_t *day)
 {
     if (NULL != year)  *year  = g_sync_year;

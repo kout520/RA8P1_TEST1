@@ -6,12 +6,119 @@
  */
 #include "tjc_usart_hmi.h"
 #include "headfile.h"
+#include "speaker_verify.h"
 
 
 #define FRAME_LENGTH 7
 #define u8 uint8_t
 
 uint8_t lock_flag = 0;
+
+/* 当前认证用户: 0=无, 1=张三, 2=李四, 3=王五, 4=老六 */
+int g_current_user = 0;
+
+/* 柜门打开时间戳 (ms), 0=柜门关闭 */
+static uint32_t g_cabinet_open_tick = 0;
+#define CABINET_TIMEOUT_MS  70000  /* 70秒自动关闭柜门 */
+
+/* 认证时间戳 (ms), 语音声纹认证通过后记录, 0=未认证 */
+static uint32_t g_auth_tick = 0;
+#define AUTH_TIMEOUT_MS     70000  /* 70秒认证超时退出 */
+
+/* 关闭柜门 + 取消身份认证 */
+void cabinet_close(void)
+{
+    /* 之前有认证身份 → 发 @6 语音提醒身份已失效 */
+    if (g_current_user > 0) {
+        voice_send_string("@6");
+        LCD_ShowMsg(6);   /* LCD: 身份记录失效，如想操作请再次认证 */
+    }
+    R_IOPORT_PinWrite(g_ioport.p_ctrl, BSP_IO_PORT_07_PIN_11, BSP_IO_LEVEL_HIGH);  /* 关闭继电器 */
+    lock_flag = 0;
+    g_current_user = 0;
+    g_cabinet_open_tick = 0;
+    g_auth_tick = 0;
+    printf("柜门已关闭, 身份认证已取消\r\n");
+}
+
+/* 柜门超时检查 (主循环周期调用, 非阻塞) */
+void cabinet_timeout_check(void)
+{
+    if (g_cabinet_open_tick != 0) {
+        if ((PN532_GetTick() - g_cabinet_open_tick) > CABINET_TIMEOUT_MS) {
+            printf("柜门超时70秒, 自动关闭并取消认证\r\n");
+            cabinet_close();
+        }
+    }
+}
+
+/* 打开柜门 + 记录70秒超时时间戳 (语音/NFC 取物时调用) */
+void cabinet_open(void)
+{
+    lock_flag = 1;
+    R_IOPORT_PinWrite(g_ioport.p_ctrl, BSP_IO_PORT_07_PIN_11, BSP_IO_LEVEL_LOW);  /* 打开继电器 */
+    g_cabinet_open_tick = PN532_GetTick();  /* 记录开门时间, 启动70秒超时 */
+    printf("开柜门: 用户%d 认证通过, 继电器开\r\n", g_current_user);
+}
+
+/* 记录认证时间戳 (语音声纹认证通过后调用, 启动70秒超时退出) */
+void auth_start(void)
+{
+    g_auth_tick = PN532_GetTick();
+}
+
+/* 认证超时检查 (主循环调用): 已认证但未开柜门(纯认证, 如打卡/信息)时, 70秒后退出认证 */
+void auth_timeout_check(void)
+{
+    if (g_current_user > 0 && g_cabinet_open_tick == 0 && g_auth_tick != 0) {
+        if ((PN532_GetTick() - g_auth_tick) > AUTH_TIMEOUT_MS) {
+            printf("认证超时70秒, 退出认证\r\n");
+            voice_send_string("@6");      /* 语音: 身份记录失效 */
+            LCD_ShowMsg(6);               /* LCD: 身份记录失效, 如想操作请再次认证 */
+            g_current_user = 0;
+            g_auth_tick = 0;
+        }
+    }
+}
+
+/* ==================================================================
+ *   串口屏延迟发送队列 (非阻塞, 解决跳页后数据发送太快被丢弃)
+ * ================================================================== */
+#define TJC_PENDING_MAX  8
+typedef struct {
+    char     str[48];
+    uint32_t send_time;   /* 到点发送的时间戳 (ms) */
+} tjc_pending_t;
+
+static tjc_pending_t g_tjc_pending[TJC_PENDING_MAX];
+static int           g_tjc_pending_cnt = 0;
+
+/* 延迟发送字符串 (非阻塞, delay_ms 毫秒后再发送) */
+void tjc_send_delayed(const char *str, uint32_t delay_ms)
+{
+    if (g_tjc_pending_cnt >= TJC_PENDING_MAX || str == NULL) return;
+    strncpy(g_tjc_pending[g_tjc_pending_cnt].str, str, sizeof(g_tjc_pending[0].str) - 1);
+    g_tjc_pending[g_tjc_pending_cnt].str[sizeof(g_tjc_pending[0].str) - 1] = '\0';
+    g_tjc_pending[g_tjc_pending_cnt].send_time = PN532_GetTick() + delay_ms;
+    g_tjc_pending_cnt++;
+}
+
+/* 主循环轮询: 发送到期的延迟命令 (非阻塞) */
+void tjc_pending_poll(void)
+{
+    for (int i = 0; i < g_tjc_pending_cnt; ) {
+        if (PN532_GetTick() >= g_tjc_pending[i].send_time) {
+            tjc_send_string(g_tjc_pending[i].str);
+            /* 移除该条目, 前移后续条目 */
+            for (int j = i; j < g_tjc_pending_cnt - 1; j++) {
+                g_tjc_pending[j] = g_tjc_pending[j + 1];
+            }
+            g_tjc_pending_cnt--;
+        } else {
+            i++;
+        }
+    }
+}
 
 typedef struct
 {
@@ -370,6 +477,21 @@ static uint8_t wifi_pwd_len = 0;
 static uint8_t wifi_data_type = 0; // 0:空闲 1:等待SSID 2:等待密码
 static uint8_t wifi_frame_received = 0; // 标记是否已完成当前帧
 
+/* 刷新单个识别参数到对应控件 t70~t74 (0=VAD 1=TH_BASE 2=DTW_MARGIN 3=WAKE 4=SPK) */
+static void param_refresh(int idx)
+{
+    char buf[40];
+    switch (idx) {
+        case 0: sprintf(buf, "t70.txt=\"%d\"", g_vad_th_min); break;
+        case 1: sprintf(buf, "t71.txt=\"%.2f\"", (double)g_th_base); break;
+        case 2: sprintf(buf, "t72.txt=\"%.2f\"", (double)g_dtw_margin); break;
+        case 3: sprintf(buf, "t73.txt=\"%.2f\"", (double)g_wake_threshold); break;
+        case 4: sprintf(buf, "t74.txt=\"%.2f\"", (double)g_spk_sim_threshold); break;
+        default: return;
+    }
+    tjc_send_string(buf);
+}
+
 // 串口屏数据交互处理
 void HIM_connection(void)
 {
@@ -420,11 +542,20 @@ void HIM_connection(void)
                 wifi_ssid_len = 0;
                 wifi_pwd_len = 0;
             }
-            else if (u(1) == 0x05) // 开锁命令
+            else if (u(1) == 0x05) // 开柜门命令
             {
-                a = 0;
-                lock_flag = 1;
-                R_IOPORT_PinWrite(g_ioport.p_ctrl, BSP_IO_PORT_04_PIN_11, BSP_IO_LEVEL_HIGH);
+                /* 需先认证身份才能开柜门 */
+                if (g_current_user == 0) {
+                    printf("开柜门失败: 未认证身份\r\n");
+                } else {
+                    a = 0;
+                    lock_flag = 1;
+                    R_IOPORT_PinWrite(g_ioport.p_ctrl, BSP_IO_PORT_07_PIN_11, BSP_IO_LEVEL_LOW);  /* 打开继电器 */
+                    g_cabinet_open_tick = PN532_GetTick();  /* 记录开门时间, 启动70秒超时 */
+                    printf("开柜门: 用户%d 认证通过, 继电器开\r\n", g_current_user);
+                    esp32_show_points(g_current_user);   /* 延时刷新积分 */
+                    esp32_refresh_inventory();            /* 延时刷新库存 */
+                }
             }
             else if (u(1) == 0x06) // 指纹录入
             {
@@ -442,14 +573,157 @@ void HIM_connection(void)
                     sprintf(str, "t0.txt=\"%d\"",AS608_GetFRNumber());
                     tjc_send_string(str);
             }
-            else if (u(1) == 0x08) // 启动摄像头
+            else if (u(1) == 0x08) // 关闭柜门命令
             {
-                    uart8_send_value(222);
+                    cabinet_close();  /* 关闭柜门 + 取消身份认证 */
             }
-            else if (u(1) == 0x09) // 其他命令
+            else if (u(1) == 0x09) //进入库存页面
             {
+                esp32_refresh_inventory();  /* 立即刷新库存 t60/t61/t62 */
+                if (g_current_user > 0) {
+                    esp32_show_points(g_current_user);  /* 同时刷新积分 t66 */
+                }
+            }
+            else if (u(1) == 0x10) // 进入考勤页面
+            {
+                /* 刷新当前身份积分 t66 */
+                if (g_current_user > 0) {
+                    esp32_show_points(g_current_user);
+                }
+                /* 打卡时间 t25 = 当前 t8 时间值 */
+                char time_buf[24];
+                char t25_buf[40];
+                esp32_rtc_get_string(time_buf, sizeof(time_buf));
+                sprintf(t25_buf, "t25.txt=\"%s\"", time_buf);
+                tjc_send_string(t25_buf);
+            }
+            else if (u(1) == 0x11) // 进入个人信息页面
+            {
+                if (g_current_user > 0) {
+                    esp32_show_points(g_current_user);  /* 延时刷新积分 t66 */
+                }
+                esp32_refresh_inventory();  /* 延时刷新库存 t60/t61/t62 */
+            }
+            else if (u(1) == 0x12) //进入库存页面
+            {
+               if (g_current_user > 0) {
+                    esp32_show_points(g_current_user);  /* 延时刷新积分 t66 */
+                }
+                esp32_refresh_inventory();  /* 延时刷新库存 t60/t61/t62 */
+            }
+            else if (u(1) == 0x13) // 刷新指纹数量给串口屏 (t50)
+            {
+                fp_refresh_count();
+            }
+            else if (u(1) == 0x14) // 添加指纹 (t51 显示状态)
+            {
+                finger_addtion();          /* 内部已刷新 t50 数量 */
+            }
+            else if (u(1) == 0x15) // 删除全部指纹
+            {
+                AS608_DeleteFR(0xffff);
+                fp_refresh_count();
+            }
+            else if (u(1) == 0x16) // 删除第一个指纹 (ID=1)
+            {
+                /* 位置无指纹数据时 AS608_DeleteFR 返回 0, 不影响不崩溃 */
+                AS608_DeleteFR(1);
+                fp_refresh_count();
+            }
+            else if (u(1) == 0x17) // 删除第二个指纹 (ID=2)
+            {
+                AS608_DeleteFR(2);
+                fp_refresh_count();
+            }
+            else if (u(1) == 0x18) // 删除第三个指纹 (ID=3)
+            {
+                AS608_DeleteFR(3);
+                fp_refresh_count();
+            }
+            else if (u(1) == 0x19) // 进入NFC读取页 (t52 实时显示卡 UID)
+            {
+                g_nfc_read_mode = 1;
+                printf("进入NFC读取页\r\n");
+            }
+            else if (u(1) == 0x1A) // 退出NFC读取页
+            {
+                g_nfc_read_mode = 0;
+                tjc_send_string("t52.txt=\"\"");   /* 清空 t52 */
+                printf("退出NFC读取页\r\n");
+            }
+            else if (u(1) == 0x20) // VAD 触发灵敏度 +100
+            {
+                g_vad_th_min += 100;
+                if (g_vad_th_min > 5000) g_vad_th_min = 5000;
+                param_refresh(0);
+            }
+            else if (u(1) == 0x21) // VAD 触发灵敏度 -100
+            {
+                g_vad_th_min -= 100;
+                if (g_vad_th_min < 800) g_vad_th_min = 800;
+                param_refresh(0);
+            }
+            else if (u(1) == 0x22) // TH_BASE (指令灵敏度) +0.02
+            {
+                g_th_base += 0.02f;
+                if (g_th_base > 0.50f) g_th_base = 0.50f;
+                param_refresh(1);
+            }
+            else if (u(1) == 0x23) // TH_BASE -0.02
+            {
+                g_th_base -= 0.02f;
+                if (g_th_base < 0.10f) g_th_base = 0.10f;
+                param_refresh(1);
+            }
+            else if (u(1) == 0x24) // DTW_MARGIN (唯一性) +0.02
+            {
+                g_dtw_margin += 0.02f;
+                if (g_dtw_margin > 0.30f) g_dtw_margin = 0.30f;
+                param_refresh(2);
+            }
+            else if (u(1) == 0x25) // DTW_MARGIN -0.02
+            {
+                g_dtw_margin -= 0.02f;
+                if (g_dtw_margin < 0.02f) g_dtw_margin = 0.02f;
+                param_refresh(2);
+            }
+            else if (u(1) == 0x26) // WAKE_THRESHOLD (唤醒灵敏度) +0.02
+            {
+                g_wake_threshold += 0.02f;
+                if (g_wake_threshold > 0.50f) g_wake_threshold = 0.50f;
+                param_refresh(3);
+            }
+            else if (u(1) == 0x27) // WAKE_THRESHOLD -0.02
+            {
+                g_wake_threshold -= 0.02f;
+                if (g_wake_threshold < 0.10f) g_wake_threshold = 0.10f;
+                param_refresh(3);
+            }
+            else if (u(1) == 0x28) // SPK_SIM_THRESHOLD (声纹严格度) +0.02
+            {
+                g_spk_sim_threshold += 0.02f;
+                if (g_spk_sim_threshold > 0.80f) g_spk_sim_threshold = 0.80f;
+                param_refresh(4);
+            }
+            else if (u(1) == 0x29) // SPK_SIM_THRESHOLD -0.02
+            {
+                g_spk_sim_threshold -= 0.02f;
+                if (g_spk_sim_threshold < 0.30f) g_spk_sim_threshold = 0.30f;
+                param_refresh(4);
+            }
+            else if (u(1) == 0x30) // 进入参数设置界面, 刷新所有参数显示
+            {
+                param_refresh(0);
+                param_refresh(1);
+                param_refresh(2);
+                param_refresh(3);
+                param_refresh(4);
+            }
 
-            }
+
+
+
+
             udelete(7);
         }
         // 数据帧: 70 XX XX ... FF FF FF (WiFi SSID/密码数据)
@@ -579,7 +853,6 @@ void deleteRingBuffer(uint16_t size)
     {
         ringBuffer.Head = (ringBuffer.Head+1)%RINGBUFFER_LEN;// 防止越界访问
         ringBuffer.Length--;
-        return;
     }
 
 }

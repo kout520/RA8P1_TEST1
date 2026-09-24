@@ -31,13 +31,18 @@
 #define MFCC_FFT_BINS       257     /* N/2+1 */
 #define MFCC_NUM_MELS       40
 #define MFCC_NUM_COEFFS     13
-#define MFCC_NUM_FRAMES     150     /* 1.5s / 10ms */
-#define MFCC_TOTAL_FEATURES (MFCC_NUM_FRAMES * MFCC_NUM_COEFFS)  /* 1950 */
+#define MFCC_MAX_FRAMES      250     /* max frames for long utterances */
+#define MFCC_TOTAL_FEATURES (MFCC_MAX_FRAMES * MFCC_NUM_COEFFS)
 
+/* Streaming API (live inference) */
 void mfcc_engine_init(void);
 void mfcc_engine_feed(const int16_t *samples, int count);
 bool mfcc_engine_ready(void);
 const float * mfcc_engine_get_features(void);
+int  mfcc_engine_get_frame_count(void);  /* actual frames (<= MFCC_MAX_FRAMES) */
 void mfcc_engine_reset(void);
+
+/* Batch API (recording post-processing) */
+void mfcc_engine_process_all(const int16_t *samples, int total_count);
 
 #endif

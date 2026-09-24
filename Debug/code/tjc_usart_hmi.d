@@ -79,7 +79,7 @@ code/tjc_usart_hmi.o: ../code/tjc_usart_hmi.c ../code/tjc_usart_hmi.h \
  D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/instances/r_ssi.h ../code/key.h \
  ../code/lcd.h ../code/AS608pro.h ../code/pn532.h ../code/PN532_def.h \
  ../code/esp32_comm.h ../code/voice.h ../code/inmp441.h \
- ../code/mfcc_engine.h ../code/voice_cmd.h
+ ../code/mfcc_engine.h ../code/voice_cmd.h ../code/speaker_verify.h
 ../code/tjc_usart_hmi.h:
 ../code/headfile.h:
 D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/api/bsp_api.h:
@@ -170,3 +170,4 @@ D:/e2_workplace/RA8P1_TEST1/ra/fsp/inc/instances/r_ssi.h:
 ../code/inmp441.h:
 ../code/mfcc_engine.h:
 ../code/voice_cmd.h:
+../code/speaker_verify.h:

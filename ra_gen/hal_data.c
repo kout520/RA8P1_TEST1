@@ -45,7 +45,7 @@ ssi_instance_ctrl_t g_i2s1_ctrl;
 
 /** SSI instance configuration */
 const ssi_extended_cfg_t g_i2s1_cfg_extend =
-{ .audio_clock = (ssi_audio_clock_t) SSI_AUDIO_CLOCK_EXTERNAL, .bit_clock_div = SSI_CLOCK_DIV_1, };
+{ .audio_clock = (ssi_audio_clock_t) SSI_AUDIO_CLOCK_INTERNAL, .bit_clock_div = SSI_CLOCK_DIV_1, };
 
 /** I2S interface configuration */
 const i2s_cfg_t g_i2s1_cfg =
@@ -860,7 +860,7 @@ const ceu_extended_cfg_t g_ceu0_extended_cfg =
   .edge_info.hdsel = 0,
   .edge_info.vdsel = 0,
   .hsync_polarity = CEU_HSYNC_POLARITY_HIGH,
-  .vsync_polarity = CEU_VSYNC_POLARITY_HIGH,
+  .vsync_polarity = CEU_VSYNC_POLARITY_LOW,
   .byte_swapping =
   { .swap_8bit_units = (0x1 | 0x2 | 0x4 | 0x0) >> 0x00 & 0x01, .swap_16bit_units = (0x1 | 0x2 | 0x4 | 0x0) >> 0x01
           & 0x01,

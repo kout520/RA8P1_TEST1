@@ -24,7 +24,7 @@
 #include <stdbool.h>
 
 /* ===== 环形缓冲区大小 ===== */
-#define ESP32_RINGBUFFER_LEN   (512)
+#define ESP32_RINGBUFFER_LEN   (2048)
 
 /* ===== ESP32 WiFi 状态 ===== */
 #define ESP32_WIFI_DISCONNECTED   0
@@ -72,6 +72,15 @@ uint8_t esp32_get_wifi_state(void);
 
 /** 获取接收到的 LED 状态 */
 uint8_t esp32_get_led_state(void);
+
+/** 显示指定用户积分余额到串口屏 t66 (认证成功/取物后调用) */
+void esp32_show_points(int user);
+
+/** 刷新库存显示到串口屏 t60/t61/t62 (进入库存页面时调用) */
+void esp32_refresh_inventory(void);
+
+/** 获取 K230 物品库存 (由 ESP32 从 K230 接收并转发) */
+void esp32_get_k230_stock(int *cola, int *sprite, int *milk);
 
 /** 获取接收到的时间同步值 (时/分/秒) */
 void esp32_get_time(uint8_t *hour, uint8_t *minute, uint8_t *second);

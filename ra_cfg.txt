@@ -309,7 +309,7 @@ FSP Configuration
     GPT Src: PCLKD
     LCDCLK Disabled
     LCDCLK Div /2
-    I3CCLK Disabled
+    I3CCLK Src: MOCO
     I3CCLK Div /4
     USBCLK Disabled
     USBCLK Div /10
@@ -454,7 +454,7 @@ FSP Configuration
       P708 N12 CEU_VIO_VD - L None "Peripheral mode" - - "BUS: BC1; BUS: WR1; CAC: CACREF; CEU: VIO_VD; ESWM_GMII/MII: ET0_MDC; ESWM_RGMII0: ET0_MDC; ESWM_RMII0: ET0_MDC; GPT6: GTCPPO6; IIC2: SDA2; IRQ: IRQ11; SCI4: DE4; SCI4: SCK4; SPI1: MOSI1; SSIE: AUDIO_CLK" - I - - 
       P709 P16 - - - - Disabled - - "BUS: CS4; CEU: VIO_D13; ESWM_GMII/MII: ET0_MDIO; ESWM_RGMII0: ET0_MDIO; ESWM_RMII0: ET0_MDIO; GPT5: GTCPPO5; IIC2: SCL2; IRQ: IRQ10; SCI4: CTS_RTS4; SCI4: DE4; SPI1: MISO1" - None - - 
       P710 M13 - - - - Disabled - - "BUS: CS5; CEU: VIO_D12; ESWM_GMII/MII: ET0_LINKSTA; ESWM_RGMII0: ET0_LINKSTA; ESWM_RMII0: ET0_LINKSTA; GLCDC: LCD_EXTCLK; GPT11: GTIOC11B; IRQ: IRQ17; SCI4: CTS4; SPI1: SSLB3" - None - - 
-      P711 N15 - - - - Disabled - - "AGT0: AGTEE0; ESWM_GMII/MII: GPTP0_PPS; ESWM_RGMII0: GPTP0_PPS; ESWM_RMII0: GPTP0_PPS; GLCDC: LCD_DATA19; GPT11: GTIOC11A; IRQ: IRQ3; SCI1: CTS_RTS1; SCI1: DE1; SPI1: SSLB2" - None - - 
+      P711 N15 GPIO - L - "Output mode (Initial High)" - - "AGT0: AGTEE0; ESWM_GMII/MII: GPTP0_PPS; ESWM_RGMII0: GPTP0_PPS; ESWM_RMII0: GPTP0_PPS; GLCDC: LCD_DATA19; GPT11: GTIOC11A; IRQ: IRQ3; SCI1: CTS_RTS1; SCI1: DE1; SPI1: SSLB2" - IO - - 
       P712 N13 - - - - Disabled - - "AGT0: AGTOB0; ESWM_GMII/MII: GPTP1_CAPTURE; ESWM_RGMII1: GPTP1_CAPTURE; ESWM_RMII1: GPTP1_CAPTURE; GLCDC: LCD_DATA20; GPT2: GTIOC2B; IRQ: IRQ2; SCI1: CTS1; SPI1: SSLB1" - None - - 
       P713 N16 GPT2_GTIOC2A - L None "Peripheral mode" - - "AGT0: AGTOA0; ESWM_GMII/MII: GPTP1_MATCH; ESWM_RGMII1: GPTP1_MATCH; ESWM_RMII1: GPTP1_MATCH; GLCDC: LCD_DATA21; GPT2: GTIOC2A; IRQ: IRQ14; SCI4: CTS4" - IO - - 
       P714 N14 - - - - Disabled - - "ESWM_GMII/MII: GPTP1_PPS; ESWM_RGMII1: GPTP1_PPS; ESWM_RMII1: GPTP1_PPS; GLCDC: LCD_DATA22; GPT12: GTIOC12B; IRQ: IRQ13; MIPI: DSI_TE; SCI4: TXD4" - None - - 
@@ -699,7 +699,7 @@ FSP Configuration
       Input: Capture Mode: Data Synchronous Fetch
       Input: Data Bus Specifications: Data Bus Size: 8-bit
       Input: Data Bus Specifications: HSYNC Polarity: High
-      Input: Data Bus Specifications: VSYNC Polarity: High
+      Input: Data Bus Specifications: VSYNC Polarity: Low
       Input: Image Component Input Order (Image Capture Mode Only): Cb0, Y0, Cr0, Y1
       Output: Byte Swapping: Swap 8-bit units, Swap 16-bit units, Swap 32-bit units
       Output: Burst Transfer Mode: Transfer in 256-byte units

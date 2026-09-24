@@ -73,6 +73,7 @@
             <slot name="P706.CPU0" secure="true"/>
             <slot name="P707.CPU0" secure="true"/>
             <slot name="P708.CPU0" secure="true"/>
+            <slot name="P711.CPU0" secure="true"/>
             <slot name="P713.CPU0" secure="true"/>
             <slot name="P715.CPU0" secure="true"/>
         </peripheral>

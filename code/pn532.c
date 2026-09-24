@@ -49,6 +49,9 @@ uint8_t uid[10];
 uint8_t uid_len = 0;
 char msg[100];
 
+/* NFC 读取页模式: 1=只读卡 UID 显示到 t52, 不做打卡匹配 (串口屏 0x19/0x1A 控制) */
+volatile uint8_t g_nfc_read_mode = 0;
+
 // 授权卡片数据库
 typedef struct {
     uint8_t uid[10];
@@ -58,37 +61,48 @@ typedef struct {
 } Card_t;
 
 Card_t authorized_cards[] = {
-    {{0x56, 0x15, 0x2B, 0x07}, 4, "Admin Card", 2},
-    {{0xCB, 0x8B, 0x0B, 0x07}, 4, "User Card 1", 1},
-    {{0x04, 0x29, 0xC8, 0x58, 0xD1, 0x2A, 0x81}, 7, "User Card 2", 5},
-    {{0x04, 0x8E, 0x66, 0x56, 0xD1, 0x2A, 0x81}, 7, "User Card 3", 6},
+    {{0x04, 0x5A, 0xAD, 0x51, 0xD1, 0x2A, 0x81}, 7, "Admin Card", 2},
+    {{0x04, 0x4E, 0x35, 0x51, 0xD1, 0x2A, 0x81}, 7, "zhang san ", 1},
+    {{0xD7, 0xDF, 0xFC, 0x06}, 4, "li shi", 5},
+    {{0x04, 0xF8, 0xEF, 0x52, 0xD1, 0x2A, 0x81}, 7, "wang wu", 6},
 };
 uint8_t num_cards = sizeof(authorized_cards) / sizeof(Card_t);
 
-// PN532 初始化
+// PN532 初始化 (带重试, 解决软复位后 PN532 未就绪问题)
 void PN532_INIT(void)
 {
     // 1. 初始化 PN532 硬件 (打开 I2C2)
     PN532_Init_Hardware();
 
-    // 2. 读取固件版本
-    result = PN532_GetFirmVersion(version);
-    if (result != PN532_ERROR_NONE)
-    {
-        printf("PN532 firmware read failed!\r\n");
+    // 2. 唤醒 + 读取固件版本 (最多重试 5 次)
+    for (int retry = 0; retry < 5; retry++) {
+        if (retry > 0) {
+            printf("PN532 retry %d...\r\n", retry);
+            R_BSP_SoftwareDelay(500, BSP_DELAY_UNITS_MILLISECONDS);
+        }
+        result = PN532_GetFirmVersion(version);
+        if (result == PN532_ERROR_NONE) break;
+    }
+    if (result != PN532_ERROR_NONE) {
+        printf("PN532 firmware read failed after 5 retries!\r\n");
         while(1);
     }
     printf("PN532 firmware v%d.%d\r\n", version[1], version[2]);
 
-    // 3. 配置 SAM (Secure Access Module)
-    result = PN532_SetSamConfig(0x01, 0x14, 0x01);
-    if (result != PN532_ERROR_NONE)
-    {
-        printf("PN532 SAM config failed!\r\n");
+    // 3. 配置 SAM
+    for (int retry = 0; retry < 3; retry++) {
+        if (retry > 0) {
+            R_BSP_SoftwareDelay(300, BSP_DELAY_UNITS_MILLISECONDS);
+        }
+        result = PN532_SetSamConfig(0x01, 0x14, 0x01);
+        if (result == PN532_ERROR_NONE) break;
+    }
+    if (result != PN532_ERROR_NONE) {
+        printf("PN532 SAM config failed after 3 retries!\r\n");
         while(1);
     }
 
-    R_BSP_SoftwareDelay(500, BSP_DELAY_UNITS_MILLISECONDS);
+    R_BSP_SoftwareDelay(200, BSP_DELAY_UNITS_MILLISECONDS);
     printf("PN532 init successful\r\n");
 }
 
@@ -103,8 +117,41 @@ void PN532_connect(void)
 
     result = PN532_ReadPassTarget(PN532_MIFARE_ISO14443A, uid, sizeof(uid), &uid_len);
 
-    if (result == PN532_ERROR_NONE && uid_len > 0)
+    /* NFC 读取页模式: 只把卡 UID 实时显示到 t52, 不匹配打卡 */
+    if (g_nfc_read_mode) {
+        if (result == PN532_ERROR_NONE && uid_len > 0) {
+            char uid_str[32];
+            char t52_buf[48];
+            int pos = 0;
+            for (uint8_t i = 0; i < uid_len; i++)
+                pos += sprintf(&uid_str[pos], "%02X ", uid[i]);
+            if (pos > 0) uid_str[pos - 1] = '\0';  /* 去掉末尾空格 */
+            sprintf(t52_buf, "t52.txt=\"%s\"", uid_str);
+            tjc_send_string(t52_buf);
+        }
+        return;
+    }
+
+    /* Suppress repeat prints for the same card still in field */
+    static uint8_t last_uid[10];
+    static uint8_t last_uid_len = 0;
+    static int    uid_zero_cnt = 0;   /* debounce card removal */
+    bool same_card = (uid_len == last_uid_len)
+                  && (memcmp(uid, last_uid, uid_len) == 0);
+
+    if (uid_len == 0) {
+        uid_zero_cnt++;
+        if (uid_zero_cnt >= 10) last_uid_len = 0;  /* truly removed */
+    } else {
+        uid_zero_cnt = 0;
+    }
+
+    if (result == PN532_ERROR_NONE && uid_len > 0 && !same_card)
     {
+        /* Remember this card */
+        memcpy(last_uid, uid, uid_len);
+        last_uid_len = uid_len;
+
         // 打印检测到的 UID
         printf("NFC UID: ");
         for (uint8_t i = 0; i < uid_len; i++)
@@ -129,56 +176,63 @@ void PN532_connect(void)
         {
             // 找到授权卡片
             Card_t *card = &authorized_cards[card_index];
-            printf("Card matched: %s (level=%d)\r\n", card->name, card->access_level);
+            //printf("Card matched: %s (level=%d)\r\n", card->name, card->access_level);
 
             // 根据权限执行不同操作
             if (card->access_level == 2)  // 管理员
             {
-                sprintf(str2, "va0.val=5");
-                tjc_send_string(str2);
-                R_BSP_SoftwareDelay(50, BSP_DELAY_UNITS_MILLISECONDS);
-                sprintf(str2, "t0.txt=\"%d\"", AS608_GetFRNumber());
-                tjc_send_string(str2);
+                printf(" lao liu \r\n");
+                tjc_send_string("va0.val=20");
+                esp32_send_attendance(4);            /* @4 → 老六 */
+                g_current_user = 4;
+                auth_start();   /* 记录认证时间戳, 启动70秒超时退出 */
+                esp32_show_points(4);
             }
-            else if(card->access_level == 1)  // 普通用户
+            else if(card->access_level == 1)  // 张三
             {
-                sprintf(str2, "va0.val=1");
-                tjc_send_string(str2);
-                uart2_send_value(1);
-                uart9_send_value(1);
-                dakai_clock_display();
-                motor_flag = 1;
+                printf(" zhang san \r\n");
+                tjc_send_string("va0.val=1");
+                esp32_send_attendance(1);            /* @1 → 张三 */
+                voice_send_attendance(1);            /* 语音: 员工张三已打卡 */
+                LCD_ShowMsg(1);                      /* LCD: 员工张三已打卡 */
+                g_current_user = 1;
+                auth_start();   /* 记录认证时间戳, 启动70秒超时退出 */
+                esp32_show_points(1);
             }
-            else if(card->access_level == 5)  // 用户 2
+            else if(card->access_level == 5)  // 李四
             {
-                sprintf(str2, "va0.val=2");
-                tjc_send_string(str2);
-                uart2_send_value(2);
-                uart9_send_value(2);
-                dakai_clock_display();
-                motor_flag = 2;
+                printf(" li shi \r\n");
+                tjc_send_string("va0.val=2");
+                esp32_send_attendance(2);            /* @2 → 李四 */
+                voice_send_attendance(2);            /* 语音: 员工李四已打卡 */
+                LCD_ShowMsg(2);                      /* LCD: 员工李四已打卡 */
+                g_current_user = 2;
+                auth_start();   /* 记录认证时间戳, 启动70秒超时退出 */
+                esp32_show_points(2);
             }
-            else if(card->access_level == 6)  // 用户 3
+            else if(card->access_level == 6)  // 王五
             {
-                sprintf(str2, "va0.val=3");
-                tjc_send_string(str2);
-                uart2_send_value(3);
-                uart9_send_value(3);
-                dakai_clock_display();
-                motor_flag = 3;
+                printf(" wang wu \r\n");
+                tjc_send_string("va0.val=3");
+                esp32_send_attendance(3);            /* @3 → 王五 */
+                voice_send_attendance(3);            /* 语音: 员工王五已打卡 */
+                LCD_ShowMsg(3);                      /* LCD: 员工王五已打卡 */
+                g_current_user = 3;
+                auth_start();   /* 记录认证时间戳, 启动70秒超时退出 */
+                esp32_show_points(3);
             }
         }
         else
         {
-            // 未授权卡片
-            uart9_send_value(4);
+            // 未授权卡片 — 通知串口屏
             printf("Unauthorized card detected\r\n");
-            R_BSP_SoftwareDelay(1000, BSP_DELAY_UNITS_MILLISECONDS);
+            tjc_send_string("va0.val=10");
+            voice_send_string("@4");            /* 语音: 打卡失败, 请重试 */
+            LCD_ShowMsg(4);                     /* LCD: 打卡失败，请重试 */
         }
 
-        // 等待卡片移开
-        printf("Waiting for card removal...\r\n");
-        R_BSP_SoftwareDelay(500, BSP_DELAY_UNITS_MILLISECONDS);
+        // 卡片已处理，等主循环冷却期移除卡片
+        // (removed blocking SoftwareDelay — now handled by nfc_cooldown in dispatch)
     }
 }
 
